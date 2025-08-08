@@ -1,0 +1,48 @@
+[tool.ruff]
+# Set the maximum line length to 88 (Black's default)
+line-length = 120
+
+# Enable auto-fixing of errors
+fix = true
+
+# Target Python 3.12
+target-version = "py312"
+
+# Directories to exclude from linting
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = ["ALL"]
+
+# Ignore specific rules if needed
+ignore = [
+    "B008",  # Do not perform function calls in argument defaults
+    "N806"   # to allow constants to be all uppercase 
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow unused imports in __init__.py files
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Use spaces around operators
+indent-style = "space"
+
+# Skip string normalization to be compatible with Black
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint.isort]
+# Import sorting configuration
+known-first-party = ["src", "app"]
+force-sort-within-sections = true
