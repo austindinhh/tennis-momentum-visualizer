@@ -1,0 +1,59 @@
+# Tournament settings
+tournaments:
+  ausopen:
+    name: "Australian Open"
+    url: "ausopen"
+  frenchopen:
+    name: "French Open"
+    url: "frenchopen"
+  wimbledon:
+    name: "Wimbledon"
+    url: "wimbledon"
+  usopen:
+    name: "US Open"
+    url: "usopen"
+
+# Data settings
+data:
+  download_timeout: 30
+  max_retries: 3
+  cache_duration: 3600  # seconds
+  supported_years:
+    min: 2011
+    max: 2024
+
+# Visualization settings
+visualization:
+  default_colors:
+    player1: "#1f77b4"  # blue
+    player2: "#d62728"  # red
+  chart:
+    height: 500
+    line_width: 3
+    marker_size: 4
+  momentum:
+    smoothing_factor: 0.1
+    window_size: 5
+
+# UI settings
+ui:
+  page_title: "Tennis Match Momentum Analyzer"
+  page_icon: "🎾"
+  layout: "wide"
+  sidebar_expanded: true
+  default_tournament: "wimbledon"
+  default_year: 2019
+  default_players:
+    player1: "Novak Djokovic"
+    player2: "Roger Federer"
+
+# Analysis settings - possibly self calculate momentum later for more clarity 
+# analysis:
+#  momentum_calculation:
+#    base_weight: 1.0
+#    recent_weight: 1.5
+#    decay_factor: 0.95
+#  statistics:
+#    precision: 2
+#    include_set_stats: true
+#    include_game_stats: true
