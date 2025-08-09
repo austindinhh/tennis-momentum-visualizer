@@ -85,8 +85,8 @@ class DataProcessor:
             # Basic momentum statistics
             momentum_stats.update(
                 {
-                    "p1_avg_momentum": df["P1Momentum"].mean(),
-                    "p2_avg_momentum": df["P2Momentum"].mean(),
+                    "p1_avg_momentum": df["P1Momentum"].median(),
+                    "p2_avg_momentum": df["P2Momentum"].median(),
                     "p1_max_momentum": df["P1Momentum"].max(),
                     "p2_max_momentum": df["P2Momentum"].max(),
                     "p1_min_momentum": df["P1Momentum"].min(),
@@ -147,8 +147,8 @@ class DataProcessor:
                     if "P1Momentum" in set_df.columns and "P2Momentum" in set_df.columns:
                         set_info.update(
                             {
-                                "p1_avg_momentum": set_df["P1Momentum"].mean(),
-                                "p2_avg_momentum": set_df["P2Momentum"].mean(),
+                                "p1_avg_momentum": set_df["P1Momentum"].median(),
+                                "p2_avg_momentum": set_df["P2Momentum"].median(),
                             },
                         )
 
@@ -200,11 +200,11 @@ class DataProcessor:
     def calculate_momentum_consistency(self, player: pd.Series, opponent: pd.Series, epsilon: float = 1e-6) -> float:
         """Calculate a consistency score for a player's momentum over a match. Scaled out of 10."""
         # Metric 1: % of time ahead of opponent
-        ahead_ratio = (player > opponent).median()
+        ahead_ratio = (player > opponent).mean()
 
         # Metric 2: % of time above own average
         avg = player.median()
-        above_own_avg = (player > avg).median()
+        above_own_avg = (player > avg).mean()
 
         # Metric 3: Stability (inverse of normalized standard deviation)
         std_dev = player.std()
@@ -213,17 +213,17 @@ class DataProcessor:
 
         # Metric 4: Growth score (momentum build-up over time)
         n = len(player)
-        early_avg = player.iloc[: n // 5].median()
-        late_avg = player.iloc[-n // 5 :].median()
+        early_avg = player.iloc[: n // 5].mean()
+        late_avg = player.iloc[-n // 5 :].mean()
         growth_score = (late_avg - early_avg) / (range_ + epsilon)
         growth_score = min(max(growth_score, 0), 1)  # Clamp between 0 and 1
 
         # Final weighted consistency score (weights can be adjusted for best results)
         score = (
-            0.3 * ahead_ratio  # External dominance
+            0.3 * ahead_ratio       # External dominance
             + 0.25 * above_own_avg  # Internal consistency
-            + 0.2 * stability  # Smooth momentum
-            + 0.25 * growth_score  # Builds toward peak
+            + 0.2 * stability       # Smooth momentum
+            + 0.25 * growth_score   # Builds toward peak
         ) * 10
 
         return round(score, 2)
