@@ -174,46 +174,61 @@ class MomentumVisualizer:
 
 
     def create_momentum_heatmap(self, match_data: dict[str, Any]) -> go.Figure:
-        """Create a heatmap showing momentum throughout the match."""
+        """Create a heatmap showing which player has the momentum advantage by set and point range."""
         df = match_data["df"]
         stats = match_data["stats"]
 
-        # Calculate momentum difference (P1 - P2)
-        momentum_diff = df["P1Momentum"] - df["P2Momentum"]
+        # Calculate momentum difference
+        df["MomentumDiff"] = df["P1Momentum"] - df["P2Momentum"]
 
-        # Create bins for visualization
-        n_bins = min(50, len(df) // 10)  # Adjust based on data size
-        bin_size = len(df) // n_bins
+        # Decide bin size
+        n_bins = min(50, len(df) // 10)  # limit number of bins
+        bin_size = max(1, len(df) // n_bins)
 
         heatmap_data = []
-        x_labels = []
+        y_labels = []
+        x_labels = None  # will set after first set is processed
 
-        for i in range(0, len(df), bin_size):
-            chunk = momentum_diff.iloc[i : i + bin_size]
-            if len(chunk) > 0:
-                heatmap_data.append(chunk.mean())
-                x_labels.append(f"Points {i + 1}-{min(i + bin_size, len(df))}")
+        # Loop through each set
+        for set_num, set_df in df.groupby("SetNo"):
+            row = []
+            local_x_labels = []
 
+            for i in range(0, len(set_df), bin_size):
+                chunk = set_df["MomentumDiff"].iloc[i : i + bin_size]
+                if len(chunk) > 0:
+                    row.append(chunk.mean())
+                    if x_labels is None:  # Only create labels once
+                        local_x_labels.append(f"Pts {i+1}-{min(i+bin_size, len(set_df))}")
+
+            heatmap_data.append(row)
+            y_labels.append(f"Set {set_num}")
+
+            if x_labels is None:
+                x_labels = local_x_labels
+
+        # Create heatmap
         fig = go.Figure(
             data=go.Heatmap(
-                z=[heatmap_data],
+                z=heatmap_data,
                 x=x_labels,
-                y=["Momentum Advantage"],
-                colorscale="RdBu_r",
+                y=y_labels,
+                colorscale="RdBu",
                 zmid=0,
-                colorbar={
-                    "title": "Momentum Difference",
-                },
-                hovertemplate="<b>%{x}</b><br>Advantage: %{z:.2f}<extra></extra>",
+                colorbar={"title": "Momentum Difference"},
+                hovertemplate="<b>%{y}, %{x}</b><br>Advantage: %{z:.2f}<extra></extra>",
             ),
         )
 
+        # Layout styling
         fig.update_layout(
-            title=f"Momentum Advantage Throughout Match<br>"
-            f"<span style='color:{self.colors['player1']}'>Blue = {stats['player1_name']}</span> | "
-            f"<span style='color:{self.colors['player2']}'>Red = {stats['player2_name']}</span>",
-            height=200,
+            title=(
+                f"Momentum Advantage by Set<br>"
+                f"<span style='color:{self.colors['player1']}'>Blue = {stats['player1_name']}</span> | "
+                f"<span style='color:{self.colors['player2']}'>Red = {stats['player2_name']}</span>"
+            ),
             template="plotly_white",
+            height=300 + len(y_labels) * 40,  # expand height based on number of sets
         )
 
         return fig
@@ -314,12 +329,12 @@ class MomentumVisualizer:
         return fig
 
 
-    def export_chart(self, fig: go.Figure, filename: str, format: str = "html") -> bool:
+    def export_chart(self, fig: go.Figure, filename: str, format_type: str = "html") -> bool:
         """Export chart to file."""
         try:
-            if format.lower() == "html":
+            if format_type.lower() == "html":
                 fig.write_html(filename)
-            elif format.lower() == "png" or format.lower() == "pdf":
+            elif format_type.lower() == "png" or format_type.lower() == "pdf":
                 fig.write_image(filename)
             else:
                 return False

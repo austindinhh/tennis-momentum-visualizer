@@ -6,9 +6,10 @@ import streamlit as st
 
 from app.components.statistics import render_detailed_set_breakdown
 from src.utils import format_time
+from src.visualizations import MomentumVisualizer
 
 
-def render_main_chart(match_data: dict[str, Any], visualizer) -> None:
+def render_main_chart(match_data: dict[str, Any], visualizer: MomentumVisualizer) -> None:
     """Render the main momentum visualization chart."""
     st.subheader("Match Momentum Visualization")
 
@@ -17,7 +18,7 @@ def render_main_chart(match_data: dict[str, Any], visualizer) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_additional_charts(match_data: dict[str, Any], visualizer, key_moments: dict[str, Any] | None = None) -> None:
+def render_additional_charts(match_data: dict[str, Any], visualizer: MomentumVisualizer, key_moments: dict[str, Any] | None = None) -> None:
     """Render additional charts in tabs."""
     # Create tabs for different chart types
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
@@ -53,7 +54,6 @@ def render_additional_charts(match_data: dict[str, Any], visualizer, key_moments
         try:
             fig_heatmap = visualizer.create_momentum_heatmap(match_data)
             st.plotly_chart(fig_heatmap, use_container_width=True)
-            st.info("💡 Blue indicates advantage for Player 1, Red for Player 2")
         except Exception as e:
             st.error(f"Unable to create heatmap: {e!s}")
 
@@ -249,7 +249,7 @@ def render_match_insights(match_data: dict[str, Any], key_moments: dict[str, Any
         st.info("Analysis complete - check individual charts for detailed insights")
 
 
-def render_export_options(match_data: dict[str, Any], visualizer) -> None:
+def render_export_options(match_data: dict[str, Any], visualizer: MomentumVisualizer) -> None:
     """Render chart export options."""
     st.subheader("💾 Export Options")
 
