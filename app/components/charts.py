@@ -92,24 +92,24 @@ def render_distribution_stats(match_data: dict[str, Any]) -> None:
     with col1:
         st.metric(
             f"{stats['player1_name']} Avg Momentum",
-            f"{stats.get('p1_avg_momentum', 0):.2f}",
+            f"{stats.get('p1_avg_momentum', 0):.1f}",
             help="Average momentum throughout the match",
         )
         st.metric(
             f"{stats['player1_name']} Peak",
-            f"{stats.get('p1_max_momentum', 0):.2f}",
+            f"{stats.get('p1_max_momentum', 0):.1f}",
             help="Highest momentum point reached",
         )
 
     with col2:
         st.metric(
             f"{stats['player2_name']} Avg Momentum",
-            f"{stats.get('p2_avg_momentum', 0):.2f}",
+            f"{stats.get('p2_avg_momentum', 0):.1f}",
             help="Average momentum throughout the match",
         )
         st.metric(
             f"{stats['player2_name']} Peak",
-            f"{stats.get('p2_max_momentum', 0):.2f}",
+            f"{stats.get('p2_max_momentum', 0):.1f}",
             help="Highest momentum point reached",
         )
 
@@ -132,9 +132,9 @@ def render_key_moments_table(key_moments: dict[str, Any]) -> None:
                 st.write(f"**Elapsed Time:** {format_time(moment.get('time', 0))}")
 
             with col2:
-                st.write(f"**Momentum Change:** {moment.get('momentum_change', 0):.2f}")
-                st.write(f"**P1 Momentum:** {moment.get('p1_momentum', 0):.2f}")
-                st.write(f"**P2 Momentum:** {moment.get('p2_momentum', 0):.2f}")
+                st.write(f"**Momentum Change:** {moment.get('momentum_change', 0):.1f}")
+                st.write(f"**P1 Momentum:** {moment.get('p1_momentum', 0):.1f}")
+                st.write(f"**P2 Momentum:** {moment.get('p2_momentum', 0):.1f}")
 
 
 def render_match_insights(match_data: dict[str, Any], key_moments: dict[str, Any] | None = None) -> None:

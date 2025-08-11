@@ -2,7 +2,6 @@
 
 from typing import Any
 
-import pandas as pd
 import polars as pl
 
 from src.utils import calculate_match_score, load_config, parse_time_to_seconds
@@ -13,264 +12,251 @@ class DataProcessor:
 
     def __init__(self, config_path: str | None = None) -> None:
         self.config = load_config(config_path)
+        self._columns: set[str] | None = None
 
 
-    def process_match_data(self, df: pl.DataFrame, animation_type: str = "Time-based") -> dict[str, Any]:
+    def _cache_columns(self, df: pl.LazyFrame) -> None:
+        """Cache column names for future use."""
+        if self._columns is None:
+            self._columns = set(df.collect_schema().names())
+
+
+    def process_match_data(self, df: pl.LazyFrame | pl.DataFrame, animation_type: str = "Time-based") -> dict[str, Any]:
         """Process the match data for visualization."""
-        # Convert Polars DataFrame to Pandas for easier integration
-        df_pandas = df.to_pandas()
+        if isinstance(df, pl.DataFrame):
+            df = df.lazy()
 
-        # Process elapsed time
-        df_pandas["cumulative_seconds"] = df_pandas["ElapsedTime"].apply(parse_time_to_seconds)
+        # Cache columns once at the start of processing
+        self._cache_columns(df)
 
-        # Convert data types
-        df_pandas["PointNumber"] = df_pandas["PointNumber"].astype(int)
-        df_pandas["P1Momentum"] = pd.to_numeric(df_pandas["P1Momentum"], errors="coerce")
-        df_pandas["P2Momentum"] = pd.to_numeric(df_pandas["P2Momentum"], errors="coerce")
-
-        # Fill any NaN values with 0
-        df_pandas["P1Momentum"] = df_pandas["P1Momentum"].fillna(0)
-        df_pandas["P2Momentum"] = df_pandas["P2Momentum"].fillna(0)
+        df = df.with_columns(
+            pl.col("ElapsedTime").map_elements(parse_time_to_seconds, return_dtype=pl.Int64).alias("cumulative_seconds"),
+            pl.col("PointNumber").cast(pl.Int64),
+            pl.col("P1Momentum").cast(pl.Float64).fill_null(0),
+            pl.col("P2Momentum").cast(pl.Float64).fill_null(0),
+        )
 
         # Choose x-axis based on animation type
         if animation_type == "Time-based":
-            df_pandas["x_axis"] = df_pandas["cumulative_seconds"]
+            df = df.with_columns(pl.col("cumulative_seconds").alias("x_axis"))
             x_label = "Elapsed Time (seconds)"
         else:
-            df_pandas["x_axis"] = df_pandas["PointNumber"]
+            df = df.with_columns(pl.col("PointNumber").alias("x_axis"))
             x_label = "Point Number"
 
-        # Calculate match statistics
-        match_stats = self._calculate_match_statistics(df, df_pandas, x_label, animation_type)
+        # Calculate stats
+        match_stats = self._calculate_match_statistics(df, x_label, animation_type)
 
-        return {"df": df_pandas, "stats": match_stats}
+        return {"df": df, "stats": match_stats}
 
 
-    def _calculate_match_statistics(
-        self, df_polars: pl.DataFrame, df: pd.DataFrame, x_label: str, animation_type: str,
-    ) -> dict[str, Any]:
+    def _calculate_match_statistics(self, df: pl.LazyFrame, x_label: str, animation_type: str) -> dict[str, Any]:
         """Calculate comprehensive match statistics."""
+        collected = df.select(
+            pl.count().alias("total_points"),
+            pl.max("cumulative_seconds").alias("match_duration"),
+            pl.first("player1").alias("player1_name"),
+            pl.first("player2").alias("player2_name"),
+        ).collect().to_dict(as_series=False)
+
         stats = {
-            "total_points": len(df),
-            "match_duration": df["cumulative_seconds"].max() if "cumulative_seconds" in df.columns else 0,
-            "player1_name": df["player1"].iloc[0] if not df.empty else "Player 1",
-            "player2_name": df["player2"].iloc[0] if not df.empty else "Player 2",
+            "total_points": collected["total_points"][0],
+            "match_duration": collected["match_duration"][0] or 0,
+            "player1_name": collected["player1_name"][0] or "Player 1",
+            "player2_name": collected["player2_name"][0] or "Player 2",
             "x_label": x_label,
             "animation_type": animation_type,
         }
 
-        # Calculate final score using utility function
         try:
-            final_score, winner, p1_sets, p2_sets = calculate_match_score(df_polars)
-
+            final_score, winner, p1_sets, p2_sets = calculate_match_score(df)
             stats.update({"final_score": final_score, "winner": winner, "p1_sets": p1_sets, "p2_sets": p2_sets})
         except Exception:
-            # Fallback if score calculation fails
             stats.update({"final_score": "Score unavailable", "winner": "Unknown", "p1_sets": 0, "p2_sets": 0})
 
-        # Add momentum statistics
         stats.update(self._calculate_momentum_stats(df))
-
-        # Add set-by-set breakdown
         stats.update(self._calculate_set_breakdown(df))
 
         return stats
 
 
-    def _calculate_momentum_stats(self, df: pd.DataFrame) -> dict[str, Any]:
+    def _calculate_momentum_stats(self, df: pl.LazyFrame) -> dict[str, Any]:
         """Calculate momentum-related statistics."""
-        momentum_stats = {}
+        if not {"P1Momentum", "P2Momentum"}.issubset(self._columns):
+            return {}
 
-        if "P1Momentum" in df.columns and "P2Momentum" in df.columns:
-            # Basic momentum statistics
-            momentum_stats.update(
-                {
-                    "p1_avg_momentum": df["P1Momentum"].median(),
-                    "p2_avg_momentum": df["P2Momentum"].median(),
-                    "p1_max_momentum": df["P1Momentum"].max(),
-                    "p2_max_momentum": df["P2Momentum"].max(),
-                    "p1_min_momentum": df["P1Momentum"].min(),
-                    "p2_min_momentum": df["P2Momentum"].min(),
-                },
-            )
+        momentum_diff = (pl.col("P1Momentum") - pl.col("P2Momentum"))
+        momentum_swings = momentum_diff.diff().abs().fill_null(0)
+        median_swings = momentum_swings.median()
 
-            # Momentum swings (times when momentum changed significantly)
-            momentum_diff = df["P1Momentum"] - df["P2Momentum"]
-            momentum_swings = abs(momentum_diff.diff()).fillna(0)
-            momentum_stats["momentum_swings"] = (momentum_swings > momentum_swings.median()).sum()
+        collected = df.select(
+            pl.median("P1Momentum").alias("p1_avg_momentum"),
+            pl.median("P2Momentum").alias("p2_avg_momentum"),
+            pl.max("P1Momentum").alias("p1_max_momentum"),
+            pl.max("P2Momentum").alias("p2_max_momentum"),
+            pl.min("P1Momentum").alias("p1_min_momentum"),
+            pl.min("P2Momentum").alias("p2_min_momentum"),
+            (momentum_swings > median_swings).sum().alias("momentum_swings"),
+            (pl.col("P1Momentum") > pl.col("P2Momentum")).sum().alias("p1_dominant_points"),
+            (pl.col("P2Momentum") > pl.col("P1Momentum")).sum().alias("p2_dominant_points"),
+        ).collect()
 
-            # Periods of dominance
-            p1_dominant_points = (df["P1Momentum"] > df["P2Momentum"]).sum()
-            p2_dominant_points = (df["P2Momentum"] > df["P1Momentum"]).sum()
+         # Unpack all single-element lists into scalars
+        stats = {k: v[0] for k, v in collected.to_dict(as_series=False).items()}
 
-            momentum_stats.update(
-                {
-                    "p1_dominant_points": p1_dominant_points,
-                    "p2_dominant_points": p2_dominant_points,
-                    "p1_dominance_pct": (p1_dominant_points / len(df)) * 100,
-                    "p2_dominance_pct": (p2_dominant_points / len(df)) * 100,
-                },
-            )
+        p1_dom = collected["p1_dominant_points"][0]
+        p2_dom = collected["p2_dominant_points"][0]
+        total_points = df.select(pl.count()).collect().item()
 
-        return momentum_stats
+        stats.update({
+            "p1_dominance_pct": (p1_dom / total_points) * 100,
+            "p2_dominance_pct": (p2_dom / total_points) * 100,
+            })
+
+        return stats
 
 
-    def _calculate_set_breakdown(self, df: pd.DataFrame) -> dict[str, Any]:
+    def _calculate_set_breakdown(self, df: pl.LazyFrame) -> dict[str, Any]:
         """Calculate set-by-set statistics."""
-        set_stats = {}
+        if "SetNo" not in self._columns:
+            return {"set_breakdown": [], "total_sets": 0}
 
-        if "SetNo" in df.columns:
-            try:
-                set_breakdown = []
+        set_numbers = df.select(pl.col("SetNo").unique()).collect().to_series().to_list()
+        set_breakdown = []
 
-                for set_no in sorted(df["SetNo"].unique()):
-                    set_df = df[df["SetNo"] == set_no]
+        # Pre-determine which optional columns exist
+        has_games_won = {"P1GamesWon", "P2GamesWon"}.issubset(self._columns)
+        has_momentum = {"P1Momentum", "P2Momentum"}.issubset(self._columns)
 
-                    set_info = {
-                        "set_number": int(set_no),
-                        "points_played": len(set_df),
-                        "duration": set_df["cumulative_seconds"].max() - set_df["cumulative_seconds"].min()
-                        if "cumulative_seconds" in set_df.columns
-                        else 0,
-                    }
+        for set_no in sorted(set_numbers):
+            set_df = df.filter(pl.col("SetNo") == set_no)
 
-                    # Get final games for this set
-                    if "P1GamesWon" in set_df.columns and "P2GamesWon" in set_df.columns:
-                        set_info.update(
-                            {
-                                "p1_games": int(set_df["P1GamesWon"].iloc[-1]),
-                                "p2_games": int(set_df["P2GamesWon"].iloc[-1]),
-                            },
-                        )
+            # Build select expressions based on available columns
+            select_exprs = [
+                pl.count().alias("points_played"),
+                (pl.max("cumulative_seconds") - pl.min("cumulative_seconds")).alias("duration"),
+            ]
 
-                    # Momentum stats for this set
-                    if "P1Momentum" in set_df.columns and "P2Momentum" in set_df.columns:
-                        set_info.update(
-                            {
-                                "p1_avg_momentum": set_df["P1Momentum"].median(),
-                                "p2_avg_momentum": set_df["P2Momentum"].median(),
-                            },
-                        )
+            if has_games_won:
+                select_exprs.extend([
+                    pl.last("P1GamesWon").alias("p1_games"),
+                    pl.last("P2GamesWon").alias("p2_games"),
+                ])
 
-                    set_breakdown.append(set_info)
+            if has_momentum:
+                select_exprs.extend([
+                    pl.median("P1Momentum").alias("p1_avg_momentum"),
+                    pl.median("P2Momentum").alias("p2_avg_momentum"),
+                ])
 
-                set_stats["set_breakdown"] = set_breakdown
-                set_stats["total_sets"] = len(set_breakdown)
+            collected = set_df.select(select_exprs).collect()
 
-            except Exception:
-                set_stats["set_breakdown"] = []
-                set_stats["total_sets"] = 0
+            set_info = {k: (v[0] if isinstance(v, list) else v) for k, v in collected.to_dict(as_series=False).items()}
+            set_info["set_number"] = int(set_no)
+            set_breakdown.append(set_info)
 
-        return set_stats
+        return {"set_breakdown": set_breakdown, "total_sets": len(set_breakdown)}
 
 
-    def smooth_momentum_data(self, df: pd.DataFrame, window_size: int | None = None) -> pd.DataFrame:
+    def smooth_momentum_data(self, df: pl.LazyFrame, window_size: int | None = None) -> pl.LazyFrame:
         """Apply smoothing to momentum data."""
         if window_size is None:
             window_size = self.config.get("visualization", {}).get("momentum", {}).get("window_size", 5)
 
-        df_smooth = df.copy()
-
-        if "P1Momentum" in df.columns and "P2Momentum" in df.columns:
-            df_smooth["P1Momentum"] = (
-                df["P1Momentum"].rolling(window=window_size, center=True).mean().fillna(df["P1Momentum"])
-            )
-            df_smooth["P2Momentum"] = (
-                df["P2Momentum"].rolling(window=window_size, center=True).mean().fillna(df["P2Momentum"])
-            )
-
-        return df_smooth
+        if {"P1Momentum", "P2Momentum"}.issubset(self._columns):
+            df = df.with_columns([
+                pl.col("P1Momentum").rolling_mean(window_size, center=True).fill_null(pl.col("P1Momentum")).alias("P1Momentum"),
+                pl.col("P2Momentum").rolling_mean(window_size, center=True).fill_null(pl.col("P2Momentum")).alias("P2Momentum"),
+            ])
+        return df
 
 
-    def calculate_momentum_derivatives(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate momentum change rates."""
-        df_with_derivatives = df.copy()
+    def calculate_momentum_derivatives(self, df: pl.LazyFrame) -> pl.LazyFrame:
+        """Calculate momentum change rates and acceleration."""
+        if {"P1Momentum", "P2Momentum"}.issubset(self._columns):
+            df = df.with_columns([
+                pl.col("P1Momentum").diff().fill_null(0).alias("P1Momentum_change"),
+                pl.col("P2Momentum").diff().fill_null(0).alias("P2Momentum_change"),
+            ])
+            df = df.with_columns([
+                pl.col("P1Momentum_change").diff().fill_null(0).alias("P1Momentum_accel"),
+                pl.col("P2Momentum_change").diff().fill_null(0).alias("P2Momentum_accel"),
+            ])
+        return df
 
-        if "P1Momentum" in df.columns and "P2Momentum" in df.columns:
-            df_with_derivatives["P1Momentum_change"] = df["P1Momentum"].diff().fillna(0)
-            df_with_derivatives["P2Momentum_change"] = df["P2Momentum"].diff().fillna(0)
 
-            # Calculate acceleration (second derivative)
-            df_with_derivatives["P1Momentum_accel"] = df_with_derivatives["P1Momentum_change"].diff().fillna(0)
-            df_with_derivatives["P2Momentum_accel"] = df_with_derivatives["P2Momentum_change"].diff().fillna(0)
-
-        return df_with_derivatives
-
-
-    def calculate_momentum_consistency(self, player: pd.Series, opponent: pd.Series, epsilon: float = 1e-6) -> float:
-        """Calculate a consistency score for a player's momentum over a match. Scaled out of 10."""
-        # Metric 1: % of time ahead of opponent
+    def calculate_momentum_consistency(self, player: pl.Series, opponent: pl.Series, epsilon: float = 1e-6) -> float:
+        """Calculate a consistency score for a player's momentum over a match."""
         ahead_ratio = (player > opponent).mean()
-
-        # Metric 2: % of time above own average
         avg = player.median()
         above_own_avg = (player > avg).mean()
 
-        # Metric 3: Stability (inverse of normalized standard deviation)
         std_dev = player.std()
         range_ = player.max() - player.min()
         stability = 1 - (std_dev / (range_ + epsilon))
 
-        # Metric 4: Growth score (momentum build-up over time)
         n = len(player)
-        early_avg = player.iloc[: n // 5].mean()
-        late_avg = player.iloc[-n // 5 :].mean()
+        early_avg = player[: n // 5].mean()
+        late_avg = player[-n // 5 :].mean()
         growth_score = (late_avg - early_avg) / (range_ + epsilon)
-        growth_score = min(max(growth_score, 0), 1)  # Clamp between 0 and 1
+        growth_score = min(max(growth_score, 0), 1)
 
-        # Final weighted consistency score (weights can be adjusted for best results)
-        score = (
-            0.3 * ahead_ratio       # External dominance
-            + 0.25 * above_own_avg  # Internal consistency
-            + 0.2 * stability       # Smooth momentum
-            + 0.25 * growth_score   # Builds toward peak
-        ) * 10
-
-        return round(score, 2)
+        return round(
+            (0.3 * ahead_ratio + 0.25 * above_own_avg + 0.2 * stability + 0.25 * growth_score) * 10, 2,
+        )
 
 
-    def identify_key_moments(self, df: pd.DataFrame, threshold: float = 2.0) -> dict[str, Any]:
+    def identify_key_moments(self, df: pl.LazyFrame, threshold: float = 2.0) -> dict[str, Any]:
         """Identify key momentum shifts in the match."""
         key_moments = {"momentum_shifts": [], "peak_moments": [], "turning_points": []}
 
-        if "P1Momentum" in df.columns and "P2Momentum" in df.columns:
-            momentum_diff = df["P1Momentum"] - df["P2Momentum"]
-            momentum_change = momentum_diff.diff().abs()
+         # Calculate momentum difference & change
+        df = df.with_columns([
+            (pl.col("P1Momentum") - pl.col("P2Momentum")).alias("momentum_diff"),
+            (pl.col("P1Momentum") - pl.col("P2Momentum")).diff().abs().alias("momentum_change")])
 
-            # Find significant momentum shifts
-            significant_shifts = df[momentum_change > momentum_change.median() * threshold]
+        # Compute median of momentum_change
+        median_change = df.select(pl.col("momentum_change").median()).collect()[0, 0]
+        shift_threshold = median_change * threshold
 
-            for idx, row in significant_shifts.iterrows():
-                key_moments["momentum_shifts"].append(
-                    {
-                        "point_number": row.get("PointNumber", idx),
-                        "time": row.get("cumulative_seconds", 0),
-                        "momentum_change": momentum_change.loc[idx],
-                        "p1_momentum": row["P1Momentum"],
-                        "p2_momentum": row["P2Momentum"],
-                    },
-                )
+        # Find significant momentum shifts
+        significant_shifts = (df.filter(pl.col("momentum_change") > shift_threshold).collect())
 
-            # Find peak momentum moments
-            p1_peaks = df[df["P1Momentum"] == df["P1Momentum"].max()]
-            p2_peaks = df[df["P2Momentum"] == df["P2Momentum"].max()]
+        for row in significant_shifts.iter_rows(named=True):
+            key_moments["momentum_shifts"].append(
+                {
+                    "point_number": row.get("PointNumber", None),
+                    "time": row.get("cumulative_seconds", 0),
+                    "momentum_change": row["momentum_change"],
+                    "p1_momentum": row["P1Momentum"],
+                    "p2_momentum": row["P2Momentum"],
+                },
+            )
 
-            for idx, row in p1_peaks.iterrows():
-                key_moments["peak_moments"].append(
-                    {
-                        "player": row.get("player1", "Player 1"),
-                        "point_number": row.get("PointNumber", idx),
-                        "momentum": row["P1Momentum"],
-                    },
-                )
+        # Peak momentum moments
+        collected_df = df.collect()
+        p1_max = collected_df["P1Momentum"].max()
+        p2_max = collected_df["P2Momentum"].max()
 
-            for idx, row in p2_peaks.iterrows():
-                key_moments["peak_moments"].append(
-                    {
-                        "player": row.get("player2", "Player 2"),
-                        "point_number": row.get("PointNumber", idx),
-                        "momentum": row["P2Momentum"],
-                    },
-                )
+        p1_peaks = collected_df.filter(pl.col("P1Momentum") == p1_max)
+        p2_peaks = collected_df.filter(pl.col("P2Momentum") == p2_max)
+
+        for row in p1_peaks.iter_rows(named=True):
+            key_moments["peak_moments"].append(
+                {
+                    "player": row.get("player1", "Player 1"),
+                    "point_number": row.get("PointNumber", None),
+                    "momentum": row["P1Momentum"],
+                },
+            )
+
+        for row in p2_peaks.iter_rows(named=True):
+            key_moments["peak_moments"].append(
+                {
+                    "player": row.get("player2", "Player 2"),
+                    "point_number": row.get("PointNumber", None),
+                    "momentum": row["P2Momentum"],
+                },
+            )
 
         return key_moments

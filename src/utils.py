@@ -56,7 +56,7 @@ def format_time(seconds: int) -> str:
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
-    return f"{int(hours):02d}:{int(minutes):02d}:{int(secs):02d}"
+    return f"{int(hours):01d}:{int(minutes):02d}:{int(secs):02d}"
 
 
 def parse_time_to_seconds(time_str: str) -> int:
@@ -126,8 +126,10 @@ def get_tournament_display_name(tournament_url: str, config: dict[str, Any]) -> 
     return tournament_url.title()
 
 
-def calculate_match_score(df: pl.DataFrame) -> tuple[str, str, int, int]:
+def calculate_match_score(df_lazy: pl.LazyFrame) -> tuple[str, str, int, int]:
     """Calculate final match score from dataframe."""
+    df = df_lazy.collect()
+
     try:
         # Get set information
         sets = (

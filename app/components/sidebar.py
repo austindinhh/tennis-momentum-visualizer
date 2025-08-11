@@ -1,8 +1,8 @@
 """Sidebar components for tournament and player selection."""
 
+import datetime
 from typing import Any
 
-import pandas as pd
 import streamlit as st
 
 
@@ -210,7 +210,7 @@ def add_to_analysis_history(tournament_name: str, year: int, player1: str, playe
         "player1": player1,
         "player2": player2,
         "result": result,
-        "timestamp": pd.Timestamp.now(),
+        "timestamp": datetime.now(),
     }
 
     # Avoid duplicates

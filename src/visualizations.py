@@ -4,6 +4,7 @@ from typing import Any
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import polars as pl
 
 from src.utils import load_config
 
@@ -21,9 +22,16 @@ class MomentumVisualizer:
         )
 
 
+    def _ensure_collected(self, df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
+            """Make sure we have a collected DataFrame for visualization and not a LazyFrame."""
+            if isinstance(df, pl.LazyFrame):
+                return df.collect()
+            return df
+
+
     def create_momentum_chart(self, match_data: dict[str, Any]) -> go.Figure:
         """Create the main momentum visualization chart."""
-        df = match_data["df"]
+        df = self._ensure_collected(match_data["df"])
         stats = match_data["stats"]
 
         fig = go.Figure()
@@ -31,8 +39,8 @@ class MomentumVisualizer:
         # Add momentum lines
         fig.add_trace(
             go.Scatter(
-                x=df["x_axis"],
-                y=df["P1Momentum"],
+                x=df.get_column("x_axis").to_list(),
+                y=df.get_column("P1Momentum").to_list(),
                 mode="lines+markers",
                 name=f"{stats['player1_name']} Momentum",
                 line={"color": self.colors["player1"], "width": self.chart_config["line_width"]},
@@ -45,8 +53,8 @@ class MomentumVisualizer:
 
         fig.add_trace(
             go.Scatter(
-                x=df["x_axis"],
-                y=df["P2Momentum"],
+                x=df.get_column("x_axis").to_list(),
+                y=df.get_column("P2Momentum").to_list(),
                 mode="lines+markers",
                 name=f"{stats['player2_name']} Momentum",
                 line={"color": self.colors["player2"], "width": self.chart_config["line_width"]},
@@ -80,14 +88,14 @@ class MomentumVisualizer:
 
     def create_set_breakdown_chart(self, match_data: dict[str, Any]) -> go.Figure:
         """Create a chart showing momentum by set."""
-        df = match_data["df"]
+        df = self._ensure_collected(match_data["df"])
         stats = match_data["stats"]
 
         if "SetNo" not in df.columns:
             return self._create_empty_chart("Set data not available")
 
         # Create subplots for each set
-        sets = sorted(df["SetNo"].unique())
+        sets = sorted(df.get_column("SetNo").unique().to_list())
         fig = make_subplots(
             rows=len(sets),
             cols=1,
@@ -97,12 +105,12 @@ class MomentumVisualizer:
         )
 
         for i, set_no in enumerate(sets, 1):
-            set_df = df[df["SetNo"] == set_no].reset_index(drop=True)
+            set_df =  df.filter(pl.col("SetNo") == set_no)
 
             fig.add_trace(
                 go.Scatter(
-                    x=set_df["x_axis"],
-                    y=set_df["P1Momentum"],
+                    x=set_df.get_column("x_axis").to_list(),
+                    y=set_df.get_column("P1Momentum").to_list(),
                     mode="lines",
                     name=stats["player1_name"] if i == 1 else None,
                     line={"color": self.colors["player1"]},
@@ -114,8 +122,8 @@ class MomentumVisualizer:
 
             fig.add_trace(
                 go.Scatter(
-                    x=set_df["x_axis"],
-                    y=set_df["P2Momentum"],
+                    x=set_df.get_column("x_axis").to_list(),
+                    y=set_df.get_column("P2Momentum").to_list(),
                     mode="lines",
                     name=stats["player2_name"] if i == 1 else None,
                     line={"color": self.colors["player2"]},
@@ -135,7 +143,7 @@ class MomentumVisualizer:
 
     def create_momentum_distribution_chart(self, match_data: dict[str, Any]) -> go.Figure:
         """Create histogram showing momentum distribution."""
-        df = match_data["df"]
+        df = self._ensure_collected(match_data["df"])
         stats = match_data["stats"]
 
         fig = go.Figure()
@@ -143,7 +151,7 @@ class MomentumVisualizer:
         # Add histograms for both players
         fig.add_trace(
             go.Histogram(
-                x=df["P1Momentum"],
+                x=df.get_column("P1Momentum").to_list(),
                 name=stats["player1_name"],
                 opacity=0.7,
                 marker_color=self.colors["player1"],
@@ -153,7 +161,7 @@ class MomentumVisualizer:
 
         fig.add_trace(
             go.Histogram(
-                x=df["P2Momentum"],
+                x=df.get_column("P2Momentum").to_list(),
                 name=stats["player2_name"],
                 opacity=0.7,
                 marker_color=self.colors["player2"],
@@ -175,31 +183,35 @@ class MomentumVisualizer:
 
     def create_momentum_heatmap(self, match_data: dict[str, Any]) -> go.Figure:
         """Create a heatmap showing which player has the momentum advantage by set and point range."""
-        df = match_data["df"]
+        df = self._ensure_collected(match_data["df"])
         stats = match_data["stats"]
 
         # Calculate momentum difference
-        df["MomentumDiff"] = df["P1Momentum"] - df["P2Momentum"]
+        df = df.with_columns((pl.col("P1Momentum") - pl.col("P2Momentum")).alias("MomentumDiff"))
 
         # Decide bin size
-        n_bins = min(50, len(df) // 10)  # limit number of bins
-        bin_size = max(1, len(df) // n_bins)
+        n_bins = min(50, df.height // 10)  # limit number of bins
+        bin_size = max(1, df.height // n_bins)
 
         heatmap_data = []
         y_labels = []
         x_labels = None  # will set after first set is processed
 
-        # Loop through each set
-        for set_num, set_df in df.groupby("SetNo"):
+        sets = sorted(df.get_column("SetNo").unique().to_list())
+
+        for set_num in sets:
+            set_df = df.filter(pl.col("SetNo") == set_num)
+            momentum_diff = set_df.get_column("MomentumDiff").to_list()
+
             row = []
             local_x_labels = []
 
-            for i in range(0, len(set_df), bin_size):
-                chunk = set_df["MomentumDiff"].iloc[i : i + bin_size]
+            for i in range(0, len(momentum_diff), bin_size):
+                chunk = momentum_diff[i:i + bin_size]
                 if len(chunk) > 0:
-                    row.append(chunk.mean())
+                    row.append(sum(chunk) / len(chunk))  # Calculate mean
                     if x_labels is None:  # Only create labels once
-                        local_x_labels.append(f"Pts {i+1}-{min(i+bin_size, len(set_df))}")
+                        local_x_labels.append(f"Pts {i+1}-{min(i+bin_size, len(momentum_diff))}")
 
             heatmap_data.append(row)
             y_labels.append(f"Set {set_num}")
@@ -236,14 +248,16 @@ class MomentumVisualizer:
 
     def create_key_moments_chart(self, match_data: dict[str, Any], key_moments: dict[str, Any]) -> go.Figure:
         """Create a chart highlighting key moments in the match."""
-        match_data["df"]
         stats = match_data["stats"]
 
         fig = self.create_momentum_chart(match_data)
 
         # Add markers for momentum shifts
         if key_moments.get("momentum_shifts"):
-            shift_points = key_moments["momentum_shifts"]
+            shift_points = key_moments.get("momentum_shifts")
+
+            if isinstance(shift_points, pl.DataFrame):
+                shift_points = shift_points.to_dicts()
 
             fig.add_trace(
                 go.Scatter(

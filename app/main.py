@@ -89,8 +89,8 @@ def run_analysis(tournament_url: str, tournament_name: str, year: int, player1: 
         status_text.info("📊 Loading match data...")
         progress_bar.progress(60)
 
-        df = analyzer.create_match_dataframe(match_id)
-        if df is None:
+        df_lazy = analyzer.create_match_dataframe(match_id)
+        if df_lazy is None:
             st.error("❌ Failed to load match data")
             return
 
@@ -99,12 +99,13 @@ def run_analysis(tournament_url: str, tournament_name: str, year: int, player1: 
         progress_bar.progress(80)
 
         # Process data
-        match_data = data_processor.process_match_data(df, animation_type)
+        match_data = data_processor.process_match_data(df_lazy, animation_type)
         match_data["stats"]["tournament_name"] = tournament_name
         match_data["stats"]["year"] = year
+        match_data["df"] = match_data["df"].collect()
 
         # Identify key moments
-        key_moments = data_processor.identify_key_moments(match_data["df"])
+        key_moments = data_processor.identify_key_moments(match_data["df"].lazy())
 
         # Store in session state
         st.session_state.match_data = match_data

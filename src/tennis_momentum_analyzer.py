@@ -116,7 +116,7 @@ class TennisMatchAnalyzer:
             return None
 
 
-    def create_match_dataframe(self, match_id: str) -> pl.DataFrame | None:
+    def create_match_dataframe(self, match_id: str) -> pl.LazyFrame | None:
         """Create a dataframe for the specific match."""
         if not self.temp_dir or not self.points_file:
             return None
@@ -145,10 +145,10 @@ class TennisMatchAnalyzer:
                         "P2GamesWon",
                     ],
                 )
-                .collect()
             )
 
-            if df_match.height == 0:
+            row_count = df_match.select(pl.count()).collect().item()
+            if row_count == 0:
                 return None
 
             # Add momentum calculations
